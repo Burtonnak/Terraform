@@ -2,6 +2,28 @@
  provider "aws" {
  region = "eu-west-3"
 }
+
+#Use Bucket S3 amazon for State files
+terraform {
+  backend "s3" {
+    bucket = "terraform-bucket-state-staging-cpo"
+    key = "Stage/Webservices/aws/terraform.tf.state"
+    region = "eu-west-3"
+    encrypt = "true"
+  }
+}
+
+data "terraform_remote_state" "db" {
+	backend = "s3"
+
+	config {
+		bucket = "terraform-bucket-state-staging-cpo"
+		key = "Stage/Databases/aws/terraform.tf.state"
+		region = "eu-west-3"
+	}
+	
+}
+
 output "elb_dns_name" {
 	value = "${aws_elb.example.dns_name}"
 	}
@@ -34,6 +56,16 @@ data "aws_availability_zones" "all" {}
 #
 #}
 
+
+data "template_file" "user_data" {
+	template = "${file("./user-data.sh")}"
+
+	vars {
+		db_address = "${data.terraform_remote_state.db.address}"
+		db_port =  "${data.terraform_remote_state.db.port}"
+	}
+	
+}
 
 #Define an elactis Load Balancer AWS
 resource "aws_elb" "example" {
@@ -71,14 +103,7 @@ resource "aws_launch_configuration" "Test_ASG" {
 	security_groups = ["${aws_security_group.WEBSGTR.id}"]
 
 
-	user_data = <<-EOF
-		#!/bin/bash
-		sudo yum -y install httpd strace sysstat mlocate
-		sudo echo "Hello Auriel, Alexiel and Lisa..." >> /var/www/html/index.html
-		sudo apachectl start
-		sudo yum -y update
-		sudo updatedb
-		EOF
+	user_data = "${data.template_file.user_data.rendered}"
 
 	lifecycle {
 		create_before_destroy = true
@@ -87,6 +112,7 @@ resource "aws_launch_configuration" "Test_ASG" {
 
 }
 
+#Define Auto scalling configuration
 resource "aws_autoscaling_group" "Test_ASG" {
 	launch_configuration 	= "${aws_launch_configuration.Test_ASG.id}"
 	availability_zones 		= ["${data.aws_availability_zones.all.names}"]
